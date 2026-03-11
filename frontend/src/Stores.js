@@ -1,13 +1,24 @@
 import { useEffect, useState } from "react";
 import axios from "axios";
+import { useNavigate } from "react-router-dom";
 
 function Stores() {
   const [stores, setStores] = useState([]);
   const [search, setSearch] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newAddress, setNewAddress] = useState("");
+  const [error, setError] = useState("");
+
+  const navigate = useNavigate();
   const token = localStorage.getItem("token");
+  const role = localStorage.getItem("role");
 
   useEffect(() => {
-    fetchStores();
+    if (!token) {
+      navigate("/");
+    } else {
+      fetchStores();
+    }
   }, []);
 
   const fetchStores = async () => {
@@ -15,10 +26,32 @@ function Stores() {
       const res = await axios.get("http://localhost:5000/stores", {
         headers: { Authorization: token },
       });
-
-      setStores(res.data.stores || res.data);
+      setStores(res.data);
     } catch (err) {
-      alert("Error fetching stores");
+      setError("Session expired. Please login again.");
+      localStorage.clear();
+      navigate("/");
+    }
+  };
+
+  const addStore = async () => {
+    if (!newName || !newAddress) {
+      alert("Enter name and address");
+      return;
+    }
+
+    try {
+      await axios.post(
+        "http://localhost:5000/admin/add-store",
+        { name: newName, address: newAddress },
+        { headers: { Authorization: token } }
+      );
+
+      setNewName("");
+      setNewAddress("");
+      fetchStores();
+    } catch (err) {
+      alert("Only admin can add stores");
     }
   };
 
@@ -29,15 +62,17 @@ function Stores() {
         { store_id: storeId, rating },
         { headers: { Authorization: token } }
       );
-
-      alert("Rated Successfully");
-      fetchStores(); // refresh after rating
-    } catch (err) {
+      fetchStores();
+    } catch {
       alert("Rating failed");
     }
   };
 
-  // 🔍 Simple Search (Frontend)
+  const logout = () => {
+    localStorage.clear();
+    navigate("/");
+  };
+
   const filteredStores = stores.filter(
     (store) =>
       store.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -48,60 +83,73 @@ function Stores() {
     <div style={{ padding: "20px" }}>
       <h2>Stores</h2>
 
-      {/* 🔍 Search Box */}
+      <button onClick={logout} style={{ float: "right" }}>
+        Logout
+      </button>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      {/* ADMIN ADD STORE SECTION */}
+      {role === "admin" && (
+        <>
+          <h3>Add New Store (Admin Only)</h3>
+          <input
+            placeholder="Store Name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <input
+            placeholder="Address"
+            value={newAddress}
+            onChange={(e) => setNewAddress(e.target.value)}
+          />
+          <button onClick={addStore}>Add Store</button>
+          <hr />
+        </>
+      )}
+
+      {/* SEARCH */}
       <input
         type="text"
-        placeholder="Search by store name or address..."
+        placeholder="Search..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        style={{ marginBottom: "15px", padding: "5px", width: "300px" }}
       />
 
-      <table border="1" style={{ width: "100%", borderCollapse: "collapse" }}>
+      <table border="1" style={{ width: "100%", marginTop: "10px" }}>
         <thead>
           <tr>
-            <th>Store Name</th>
+            <th>Name</th>
             <th>Address</th>
             <th>Overall Rating</th>
             <th>My Rating</th>
-            <th>Action</th>
+            <th>Rate</th>
           </tr>
         </thead>
-
         <tbody>
-          {filteredStores.length === 0 ? (
-            <tr>
-              <td colSpan="5" style={{ textAlign: "center" }}>
-                No stores available
+          {filteredStores.map((store) => (
+            <tr key={store.id}>
+              <td>{store.name}</td>
+              <td>{store.address}</td>
+              <td>{store.overall_rating || "No Ratings"}</td>
+              <td>{store.my_rating || "Not Rated"}</td>
+              <td>
+                <select
+                  value={store.my_rating ? String(store.my_rating) : ""}
+                  onChange={(e) =>
+                    rateStore(store.id, Number(e.target.value))
+                  }
+                >
+                  <option value="">Rate</option>
+                  <option value="1">1 ⭐</option>
+                  <option value="2">2 ⭐⭐</option>
+                  <option value="3">3 ⭐⭐⭐</option>
+                  <option value="4">4 ⭐⭐⭐⭐</option>
+                  <option value="5">5 ⭐⭐⭐⭐⭐</option>
+                </select>
               </td>
             </tr>
-          ) : (
-            filteredStores.map((store) => (
-              <tr key={store.id}>
-                <td>{store.name}</td>
-                <td>{store.address}</td>
-                <td>{store.overall_rating || "No Ratings"}</td>
-                <td>{store.my_rating || "Not Rated"}</td>
-                <td>
-                  <select
-                    value={store.my_rating || ""}
-                    onChange={(e) =>
-                      rateStore(store.id, Number(e.target.value))
-                    }
-                  >
-                    <option value="" disabled>
-                      Rate
-                    </option>
-                    <option value="1">1 ⭐</option>
-                    <option value="2">2 ⭐⭐</option>
-                    <option value="3">3 ⭐⭐⭐</option>
-                    <option value="4">4 ⭐⭐⭐⭐</option>
-                    <option value="5">5 ⭐⭐⭐⭐⭐</option>
-                  </select>
-                </td>
-              </tr>
-            ))
-          )}
+          ))}
         </tbody>
       </table>
     </div>

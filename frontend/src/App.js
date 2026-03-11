@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Login from "./Login";
 import Register from "./Register";
 import Stores from "./Stores";
+import ProtectedRoute from "./ProtectedRoute";
 
 function App() {
   return (
@@ -9,7 +10,15 @@ function App() {
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/register" element={<Register />} />
-        <Route path="/stores" element={<Stores />} />
+
+        <Route
+          path="/stores"
+          element={
+            <ProtectedRoute>
+              <Stores />
+            </ProtectedRoute>
+          }
+        />
       </Routes>
     </Router>
   );

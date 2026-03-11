@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
@@ -5,10 +6,9 @@ const cors = require("cors");
 const pool = require("./db");
 
 const app = express();
-const PORT = 5000;
-const SECRET = "mysecretkey";
+const PORT = process.env.PORT || 5000;
+const SECRET = process.env.JWT_SECRET;
 
-// Middlewares
 app.use(cors({ origin: "http://localhost:3000" }));
 app.use(express.json());
 
@@ -26,9 +26,21 @@ const auth = (req, res, next) => {
     const decoded = jwt.verify(token, SECRET);
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
+};
+
+/* =========================
+   ROLE AUTHORIZATION
+========================= */
+const authorize = (roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+    next();
+  };
 };
 
 /* =========================
@@ -38,7 +50,11 @@ app.post("/register", async (req, res) => {
   const { name, email, password, address } = req.body;
 
   if (!name || !email || !password || !address) {
-    return res.status(400).json({ message: "All fields are required" });
+    return res.status(400).json({ message: "All fields required" });
+  }
+
+  if (password.length < 6) {
+    return res.status(400).json({ message: "Password must be at least 6 characters" });
   }
 
   try {
@@ -48,13 +64,13 @@ app.post("/register", async (req, res) => {
     );
 
     if (existing.rows.length > 0) {
-      return res.status(400).json({ message: "Email already registered" });
+      return res.status(400).json({ message: "Email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await pool.query(
-      "INSERT INTO users (name, email, password, address, role) VALUES ($1,$2,$3,$4,$5)",
+      "INSERT INTO users (name,email,password,address,role) VALUES ($1,$2,$3,$4,$5)",
       [name, email, hashedPassword, address, "user"]
     );
 
@@ -94,32 +110,56 @@ app.post("/login", async (req, res) => {
       { expiresIn: "1d" }
     );
 
-    res.json({ token });
+    res.json({ token, role: user.role });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
 /* =========================
-   GET STORES (FIXED)
+   ADMIN - ADD STORE
+========================= */
+app.post("/admin/add-store", auth, authorize(["admin"]), async (req, res) => {
+  const { name, address, owner_id } = req.body;
+
+  if (!name || !address) {
+    return res.status(400).json({ message: "Name and address required" });
+  }
+
+  try {
+    await pool.query(
+      "INSERT INTO stores (name,address,owner_id) VALUES ($1,$2,$3)",
+      [name, address, owner_id || null]
+    );
+
+    res.json({ message: "Store added successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/* =========================
+   GET STORES + SEARCH
 ========================= */
 app.get("/stores", auth, async (req, res) => {
-  try {
-    const userId = req.user.id;
+  const search = req.query.search || "";
+  const userId = req.user.id;
 
+  try {
     const result = await pool.query(
       `
       SELECT 
         s.id,
         s.name,
         s.address,
-        ROUND(AVG(r.rating)::numeric, 1) AS overall_rating,
-        MAX(CASE WHEN r.user_id = $1 THEN r.rating END) AS my_rating
+        ROUND(AVG(r.rating)::numeric,1) AS overall_rating,
+        MAX(CASE WHEN r.user_id=$1 THEN r.rating END) AS my_rating
       FROM stores s
-      LEFT JOIN ratings r ON s.id = r.store_id
+      LEFT JOIN ratings r ON s.id=r.store_id
+      WHERE s.name ILIKE $2
       GROUP BY s.id
       `,
-      [userId]
+      [userId, `%${search}%`]
     );
 
     res.json(result.rows);
@@ -129,21 +169,21 @@ app.get("/stores", auth, async (req, res) => {
 });
 
 /* =========================
-   RATE STORE (UPSERT)
+   RATE STORE
 ========================= */
 app.post("/rate", auth, async (req, res) => {
   const { store_id, rating } = req.body;
 
-  if (!store_id || rating === undefined) {
-    return res.status(400).json({ message: "Store ID and rating required" });
+  if (!store_id || rating < 1 || rating > 5) {
+    return res.status(400).json({ message: "Valid store_id and rating (1-5) required" });
   }
 
   try {
     await pool.query(
-      `INSERT INTO ratings (user_id, store_id, rating)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, store_id)
-       DO UPDATE SET rating = EXCLUDED.rating`,
+      `INSERT INTO ratings (user_id,store_id,rating)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (user_id,store_id)
+       DO UPDATE SET rating=EXCLUDED.rating`,
       [req.user.id, store_id, rating]
     );
 
@@ -156,31 +196,33 @@ app.post("/rate", auth, async (req, res) => {
 /* =========================
    OWNER DASHBOARD
 ========================= */
-app.get("/owner/dashboard", auth, async (req, res) => {
-  if (req.user.role !== "store_owner") {
-    return res.status(403).json({ message: "Access denied" });
+app.get(
+  "/owner/dashboard",
+  auth,
+  authorize(["store_owner"]),
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `
+        SELECT 
+          s.name,
+          ROUND(AVG(r.rating)::numeric,1) AS avg_rating,
+          COUNT(r.id) AS total_ratings
+        FROM stores s
+        LEFT JOIN ratings r ON s.id=r.store_id
+        WHERE s.owner_id=$1
+        GROUP BY s.id
+        `,
+        [req.user.id]
+      );
+
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ message: err.message });
+    }
   }
+);
 
-  try {
-    const result = await pool.query(
-      `SELECT ROUND(AVG(r.rating)::numeric, 1) AS average_rating
-       FROM ratings r
-       JOIN stores s ON r.store_id = s.id
-       WHERE s.owner_id = $1`,
-      [req.user.id]
-    );
-
-    res.json({
-      averageRating: result.rows[0].average_rating || 0,
-    });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-/* =========================
-   START SERVER
-========================= */
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
